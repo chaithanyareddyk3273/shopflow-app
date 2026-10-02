@@ -1,0 +1,61 @@
+# Quick local run of the whole system without Kubernetes:
+#   docker compose up --build
+# orders-api -> http://localhost:8080   inventory-svc -> http://localhost:8081
+# RabbitMQ UI -> http://localhost:15672 (shopflow / shopflow)
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: shopflow
+      POSTGRES_PASSWORD: shopflow
+      POSTGRES_DB: shopflow
+    volumes:
+      - ./deploy/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shopflow"]
+      interval: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: shopflow
+      RABBITMQ_DEFAULT_PASS: shopflow
+    ports:
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      retries: 10
+
+  inventory-svc:
+    build: services/inventory-svc
+    environment:
+      DATABASE_URL: postgresql://shopflow:shopflow@postgres:5432/inventory
+    ports:
+      - "8081:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  orders-api:
+    build: services/orders-api
+    environment:
+      DATABASE_URL: postgresql://shopflow:shopflow@postgres:5432/orders
+      RABBITMQ_URL: amqp://shopflow:shopflow@rabbitmq:5672/%2F
+      INVENTORY_URL: http://inventory-svc:8000
+    ports:
+      - "8080:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  notifier:
+    build: services/notifier
+    environment:
+      RABBITMQ_URL: amqp://shopflow:shopflow@rabbitmq:5672/%2F
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
