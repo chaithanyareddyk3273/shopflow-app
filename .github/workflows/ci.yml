@@ -10,7 +10,10 @@ name: CI
 on:
   push:
     branches: [main]
+    # Docs-only changes don't need a rebuild or a deployment
+    paths-ignore: ['**.md', 'docs/**']
   pull_request:
+    paths-ignore: ['**.md', 'docs/**']
   workflow_dispatch:
 
 permissions:
