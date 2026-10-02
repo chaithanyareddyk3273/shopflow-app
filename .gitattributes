@@ -1,0 +1,2 @@
+# Keep LF everywhere: shell scripts and container builds break on CRLF
+* text=auto eol=lf
