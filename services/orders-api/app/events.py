@@ -16,11 +16,16 @@ class EventPublisher:
         try:
             channel = connection.channel()
             channel.exchange_declare(exchange=self.exchange, exchange_type="topic", durable=True)
+            # Publisher confirms + mandatory: the broker must acknowledge the event, and an
+            # event no queue is bound to raises UnroutableError instead of being silently
+            # dropped (e.g. if it's published before the notifier has declared its queue).
+            channel.confirm_delivery()
             channel.basic_publish(
                 exchange=self.exchange,
                 routing_key=routing_key,
                 body=json.dumps(payload, default=str),
                 properties=pika.BasicProperties(content_type="application/json", delivery_mode=2),
+                mandatory=True,
             )
         finally:
             connection.close()

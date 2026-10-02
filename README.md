@@ -37,10 +37,28 @@ flowchart LR
 | **Sync HTTP for stock, async events for notifications** | The order must know immediately whether stock exists, but a notification can arrive later. A notifier outage never blocks orders. |
 | **Atomic stock reservation** | `UPDATE … SET stock = stock - n WHERE sku = … AND stock >= n` is a single statement, so concurrent orders can't oversell the last item. No application-level locks. |
 | **Persist the order before reserving** | Every attempt is auditable, including rejected and failed ones. |
+| **Publisher confirms + mandatory routing** | RabbitMQ must acknowledge every event, and an event with no bound queue raises an error instead of vanishing silently (see below). |
 | **Poison messages are dropped, not requeued** | A malformed event would otherwise be redelivered forever and block the queue. |
 | **Separate liveness and readiness** | `/healthz` (liveness) never checks dependencies, so a database outage doesn't trigger a restart storm. `/readyz` (readiness) checks them, removing the pod from traffic until they recover. |
 | **Memory limits, no CPU limits** | CPU requests are enough for scheduling; CPU limits cause throttling and latency spikes. |
 | **Hardened pods** | Non-root user, read-only root filesystem, all Linux capabilities dropped, seccomp `RuntimeDefault`, no service-account token. |
+
+---
+
+## 🐛 What broke and how I fixed it
+
+**Symptom:** on a fresh `docker compose up`, the first order was confirmed but the customer never got a notification, and nothing reported a problem.
+
+**Root cause:** two things combined.
+1. RabbitMQ's healthcheck (`rabbitmq-diagnostics ping`) passed *before* the AMQP port accepted connections. The notifier started, was refused, and backed off for 5 seconds before retrying.
+2. In that window orders-api published `order.created`. A topic exchange with **no queue bound to it silently drops messages**, and the notifier hadn't declared its queue yet. The event was lost, and the publish call still returned success.
+
+**Fix:**
+- **orders-api** now uses **publisher confirms** with `mandatory=True`. An unroutable event raises `UnroutableError`, which is logged and counted in `order_event_publish_failures_total`. Lost events are now visible and can be alerted on. Covered by `tests/test_events.py`.
+- **Compose** waits on `check_port_connectivity` instead of `ping`. (The Kubernetes readiness probe already did.)
+- **notifier** retries every 2 seconds instead of 5.
+
+**Verified** by starting orders-api without the notifier: the order returns `201`, the log shows `UnroutableError`, and the metric reads `1`. A full fresh start now delivers the notification. **Still open:** detection isn't the same as delivery. Guaranteeing delivery needs the transactional outbox pattern (see the roadmap).
 
 ---
 
@@ -123,4 +141,4 @@ shopflow-app/
 - [ ] **Phase 2: CI/CD + GitOps.** GitHub Actions (test → build → Trivy scan → push), ArgoCD, dev and prod environments, promotion by pull request
 - [ ] **Phase 3: Production on AWS.** Terraform EKS, Prometheus + Grafana, HPA, NetworkPolicies, Sealed Secrets, Argo Rollouts canary deployments
 
-**Known trade-offs to address:** if the database write fails after stock is reserved, that stock isn't released. The fix is a compensating action or the saga pattern. Similarly, an event can be lost if RabbitMQ is down at publish time; the fix is the transactional outbox pattern. Both are planned for later phases.
+**Known trade-offs to address:** if the database write fails after stock is reserved, that stock isn't released. The fix is a compensating action or the saga pattern. Similarly, if RabbitMQ is unavailable or the event can't be routed at publish time, the order stays confirmed but the event is not retried. The failure is logged and counted in `order_event_publish_failures_total`. The fix is the transactional outbox pattern. Both are planned for later phases.
