@@ -67,8 +67,8 @@ def consume_forever() -> None:
             channel.start_consuming()
         except pika.exceptions.AMQPError as exc:
             connected.clear()
-            log.warning("rabbitmq connection lost (%s); retrying in 5s", exc)
-            time.sleep(5)
+            log.warning("rabbitmq connection lost (%s); retrying in 2s", exc)
+            time.sleep(2)
 
 
 class ProbeHandler(BaseHTTPRequestHandler):

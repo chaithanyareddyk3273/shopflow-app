@@ -24,7 +24,8 @@ services:
     ports:
       - "15672:15672"
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      # "ping" passes before the AMQP port accepts connections; wait for the port itself
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
       interval: 10s
       retries: 10
 

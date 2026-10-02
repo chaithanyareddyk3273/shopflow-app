@@ -6,14 +6,20 @@ set -euo pipefail
 NAMESPACE=shopflow
 PORT=18080
 
+BODY=$(mktemp)
 kubectl port-forward -n "$NAMESPACE" svc/orders-api "$PORT:8000" >/dev/null 2>&1 &
 PF_PID=$!
-trap 'kill $PF_PID 2>/dev/null' EXIT
+trap 'kill $PF_PID 2>/dev/null; rm -f "$BODY"' EXIT
 sleep 3
 
+# Prints the response body to stderr and echoes the HTTP status code.
+# (Writes via a temp file: curl can't write to /dev/stderr in Git Bash on Windows.)
 order() {
-  curl -s -o /dev/stderr -w "%{http_code}" -X POST "localhost:$PORT/orders" \
-    -H "Content-Type: application/json" -d "$1"
+  local code
+  code=$(curl -s -o "$BODY" -w "%{http_code}" -X POST "localhost:$PORT/orders" \
+    -H "Content-Type: application/json" -d "$1")
+  cat "$BODY" >&2
+  echo "$code"
 }
 
 echo "==> 1. Valid order (expect 201 CONFIRMED)"
