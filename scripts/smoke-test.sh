@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # End-to-end test against the running kind deployment:
 # order -> stock reserved -> order confirmed -> event -> notification sent.
+# Usage: ./scripts/smoke-test.sh [namespace]   (default: shopflow; also shopflow-dev, shopflow-prod)
 set -euo pipefail
 
-NAMESPACE=shopflow
+NAMESPACE="${1:-shopflow}"
 PORT=18080
 
 BODY=$(mktemp)

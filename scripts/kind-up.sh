@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Build the three images, load them into a local kind cluster and deploy the Helm chart.
+# Build the three images, load them into a local kind cluster and deploy the Helm chart
+# with the "local" environment (namespace "shopflow"). This is the fast inner loop for
+# trying a change on your laptop; dev and prod are deployed by ArgoCD instead.
 # Run from the shopflow-app folder (Git Bash on Windows):   ./scripts/kind-up.sh
 set -euo pipefail
 
@@ -27,7 +29,7 @@ done
 echo "==> Deploying Helm chart"
 helm upgrade --install shopflow "$GITOPS_DIR/charts/shopflow" \
   --namespace "$NAMESPACE" --create-namespace \
-  -f "$GITOPS_DIR/environments/dev/values.yaml"
+  -f "$GITOPS_DIR/environments/local/values.yaml"
 
 # The image tag stays "dev", so restart to pick up freshly built images
 kubectl rollout restart deployment -n "$NAMESPACE" "${SERVICES[@]}"

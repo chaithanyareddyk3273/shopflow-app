@@ -1,5 +1,10 @@
 # 🛒 ShopFlow: Microservices on Kubernetes with CI/CD and GitOps
 
+[![CI](https://github.com/chaithanyareddyk3273/shopflow-app/actions/workflows/ci.yml/badge.svg)](https://github.com/chaithanyareddyk3273/shopflow-app/actions/workflows/ci.yml)
+![Kubernetes](https://img.shields.io/badge/Kubernetes-Helm%20%7C%20kind-326CE5?logo=kubernetes&logoColor=white)
+![ArgoCD](https://img.shields.io/badge/GitOps-ArgoCD-EF7B4D?logo=argo&logoColor=white)
+![Trivy](https://img.shields.io/badge/Security-Trivy-1904DA?logo=aqua&logoColor=white)
+
 ShopFlow is a small order-processing system built as **three Python microservices**, deployed to Kubernetes with Helm. It's built in phases toward a full **CI/CD + GitOps (ArgoCD)** platform on **Amazon EKS**.
 
 > 📖 **New here? Start with the [code walkthrough](docs/CODE_WALKTHROUGH.md).** It follows one order through the code step by step, in plain English.
@@ -31,6 +36,31 @@ flowchart LR
 
 ---
 
+## 🔄 CI/CD and GitOps
+
+```mermaid
+flowchart LR
+    PUSH([git push]) --> T[Test<br/>ruff + pytest<br/>×3 services]
+    T --> B[Build image<br/>+ Trivy scan]
+    B -->|main only| R[(GHCR<br/>sha-abc1234)]
+    R --> G[Commit new tag to<br/>shopflow-gitops<br/>environments/dev]
+    G -->|ArgoCD auto-sync| DEV[shopflow-dev]
+    DEV -.->|Promote workflow<br/>opens a PR| PR{{PR: dev tags<br/>→ prod}}
+    PR -->|human merges| PROD[shopflow-prod]
+```
+
+| Stage | What happens | Where |
+|---|---|---|
+| **Test** | Lint (ruff) and unit tests, run in parallel for each service | [`ci.yml`](.github/workflows/ci.yml), every push and PR |
+| **Build + scan** | Builds each image and scans it with **Trivy**. HIGH/CRITICAL vulnerabilities with an available fix **fail the build**, so a vulnerable image is never published. | every push and PR |
+| **Publish** | Pushes images to GitHub Container Registry, tagged `sha-<commit>` (immutable) | `main` only |
+| **Deploy to dev** | Commits the new tag to [`shopflow-gitops/environments/dev`](https://github.com/chaithanyareddyk3273/shopflow-gitops/tree/main/environments/dev). **ArgoCD** sees the commit and deploys it. | `main` only |
+| **Promote to prod** | A workflow in shopflow-gitops opens a **pull request** copying dev's tags into prod. Merging it deploys prod; reverting it rolls back. | manual, reviewed |
+
+**CI never touches the cluster.** It has no Kubernetes credentials at all; it only changes Git. ArgoCD, running *inside* the cluster, pulls the change. Every deployment is a Git commit, so it's reviewable and auditable, and a rollback is `git revert`.
+
+---
+
 ## 🧠 Design decisions
 
 | Decision | Why |
@@ -44,6 +74,10 @@ flowchart LR
 | **Separate liveness and readiness** | `/healthz` (liveness) never checks dependencies, so a database outage doesn't trigger a restart storm. `/readyz` (readiness) checks them, removing the pod from traffic until they recover. |
 | **Memory limits, no CPU limits** | CPU requests are enough for scheduling; CPU limits cause throttling and latency spikes. |
 | **Hardened pods** | Non-root user, read-only root filesystem, all Linux capabilities dropped, seccomp `RuntimeDefault`, no service-account token. |
+| **Immutable image tags** | Deployments reference `sha-<commit>`, never `latest`, so every environment states exactly which code it runs, and a rollback is reproducible. |
+| **Pull-based GitOps** | CI has no cluster credentials; ArgoCD pulls from Git. A leaked CI secret can't touch the cluster, and manual `kubectl` changes are reverted by ArgoCD's self-heal. |
+| **Security patches at build time** | Dockerfiles run `apt-get upgrade`, because the official Python image can lag behind Debian's security fixes (see below). |
+| **Third-party actions pinned to commits** | The Trivy action is pinned to a commit SHA, not a tag, because a tag can be moved to different code. |
 
 ---
 
@@ -61,6 +95,16 @@ flowchart LR
 - **notifier** retries every 2 seconds instead of 5.
 
 **Verified** by starting orders-api without the notifier: the order returns `201`, the log shows `UnroutableError`, and the metric reads `1`. A full fresh start now delivers the notification. **Still open:** detection isn't the same as delivery. Guaranteeing delivery needs the transactional outbox pattern (see the roadmap).
+
+### Security: what the first Trivy scan found
+Before turning on the "fail on HIGH/CRITICAL" gate, I scanned the existing images locally:
+
+| Finding | Where | Fix |
+|---|---|---|
+| 3 HIGH CVEs in **starlette 0.41.3**, the web layer under FastAPI (e.g. CVE-2025-62727) | orders-api, inventory-svc | Upgraded FastAPI 0.115 → 0.142 and pinned starlette 1.7.0 |
+| 1 HIGH CVE in **libpcre2** (CVE-2026-103111): Debian had released a fix, but the official `python:3.12-slim` image hadn't picked it up yet | all 3 images | `apt-get upgrade` during the build |
+
+Result: **0 HIGH/CRITICAL** in all three images, all tests passing, and the end-to-end test passing on kind. The gate in CI keeps it that way.
 
 ---
 
@@ -90,14 +134,25 @@ projects/
 └── shopflow-gitops/
 ```
 
-### Option A: Kubernetes (kind)
+### Option A: Kubernetes (kind), quick local loop
 ```bash
 cd shopflow-app
-./scripts/kind-up.sh      # creates the cluster, builds + loads images, installs the Helm chart
+./scripts/kind-up.sh      # creates the cluster, builds + loads images, installs the chart ("local" environment)
 ./scripts/smoke-test.sh   # end-to-end test: order → stock → event → notification
 ```
 
-### Option B: Docker Compose (no Kubernetes)
+### Option B: the full GitOps setup (ArgoCD deploys dev and prod from Git)
+```bash
+cd shopflow-gitops
+./scripts/argocd-up.sh                            # installs ArgoCD and the app-of-apps
+cd ../shopflow-app
+./scripts/smoke-test.sh shopflow-dev              # test what ArgoCD deployed to dev
+./scripts/smoke-test.sh shopflow-prod             # ...and to prod
+```
+
+**One-time setup for the pipeline** (needed only if you fork the repos): create a fine-grained GitHub token with **Contents: read and write** and **Pull requests: read and write** on `shopflow-gitops` only, and add it as a repository secret named **`GITOPS_TOKEN`** in both repos. CI uses it to commit new image tags to dev and to open promotion PRs.
+
+### Option C: Docker Compose (no Kubernetes)
 ```bash
 docker compose up --build
 curl -X POST localhost:8080/orders -H "Content-Type: application/json" \
@@ -120,6 +175,7 @@ pytest
 
 ```
 shopflow-app/
+├── .github/workflows/ci.yml   # CI/CD: test → build + scan → publish → deploy to dev
 ├── services/
 │   ├── orders-api/        # FastAPI · Postgres · RabbitMQ publisher
 │   ├── inventory-svc/     # FastAPI · Postgres
@@ -129,8 +185,8 @@ shopflow-app/
 │       ├── Dockerfile     # python:3.12-slim, non-root
 │       └── requirements.txt
 ├── scripts/
-│   ├── kind-up.sh         # local Kubernetes deploy
-│   └── smoke-test.sh      # end-to-end test
+│   ├── kind-up.sh         # local Kubernetes deploy ("local" environment)
+│   └── smoke-test.sh      # end-to-end test: ./scripts/smoke-test.sh [namespace]
 ├── docs/CODE_WALKTHROUGH.md  # plain-English guide: one order through the code
 ├── deploy/postgres-init.sql
 └── docker-compose.yml

@@ -9,6 +9,12 @@ FROM python:3.12-slim
 # PIP_*:                   keep pip quiet and don't keep its download cache in the image
 ENV PYTHONDONTWRITEBYTECODE=1     PYTHONUNBUFFERED=1     PIP_NO_CACHE_DIR=1     PIP_DISABLE_PIP_VERSION_CHECK=1
 
+# Apply the latest Debian security patches. The official Python image is rebuilt
+# periodically, so it can lag behind fixes Debian has already released.
+RUN apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
+ && rm -rf /var/lib/apt/lists/*
+
 # All following commands run inside /app in the container
 WORKDIR /app
 
