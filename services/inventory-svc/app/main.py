@@ -1,4 +1,13 @@
-"""inventory-svc: owns product stock and reserves it for orders."""
+"""
+inventory-svc: owns product stock. It is the ONLY service allowed to change stock.
+
+Other services never touch the inventory database directly; they call this API:
+  GET  /items          list products and their stock
+  GET  /items/{sku}    one product
+  POST /reserve        take stock for an order (200 = reserved, 409 = not enough, 404 = unknown SKU)
+
+Structure mirrors orders-api: see services/orders-api/app/main.py for detailed comments.
+"""
 import logging
 import os
 from contextlib import asynccontextmanager

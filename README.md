@@ -2,6 +2,8 @@
 
 ShopFlow is a small order-processing system built as **three Python microservices**, deployed to Kubernetes with Helm. It's built in phases toward a full **CI/CD + GitOps (ArgoCD)** platform on **Amazon EKS**.
 
+> 📖 **New here? Start with the [code walkthrough](docs/CODE_WALKTHROUGH.md).** It follows one order through the code step by step, in plain English.
+>
 > Kubernetes manifests live in the companion repo **[shopflow-gitops](https://github.com/chaithanyareddyk3273/shopflow-gitops)**, following the GitOps convention of keeping app code and deployment config separate.
 
 ---
@@ -129,6 +131,7 @@ shopflow-app/
 ├── scripts/
 │   ├── kind-up.sh         # local Kubernetes deploy
 │   └── smoke-test.sh      # end-to-end test
+├── docs/CODE_WALKTHROUGH.md  # plain-English guide: one order through the code
 ├── deploy/postgres-init.sql
 └── docker-compose.yml
 ```

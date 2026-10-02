@@ -22,10 +22,20 @@ COLUMNS = "id, sku, quantity, customer_email, status, created_at"
 
 
 class OrderRepository:
+    """
+    All SQL for orders lives here, so main.py never writes SQL itself.
+    (This is the "repository pattern": it also makes the database easy to fake in tests.)
+    """
+
     def __init__(self, dsn: str):
-        self.dsn = dsn
+        self.dsn = dsn  # connection string, e.g. postgresql://user:pass@host:5432/orders
 
     def _connect(self):
+        # dict_row: rows come back as dicts ({"id": 1, "sku": ...}) instead of tuples.
+        # Used as `with self._connect() as conn:`, the transaction is committed when the
+        # block ends without an error, rolled back if one is raised, and the connection closed.
+        # Values are always passed as %s parameters, never pasted into the SQL string,
+        # which prevents SQL injection.
         return psycopg.connect(self.dsn, row_factory=dict_row, connect_timeout=3)
 
     def init_schema(self, attempts: int = 30, delay: float = 2.0) -> None:
