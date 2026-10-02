@@ -197,7 +197,7 @@ shopflow-app/
 ## 🗺️ Roadmap
 
 - [x] **Phase 1: Microservices on Kubernetes.** 3 services, Dockerfiles, Helm chart, kind, tests
-- [ ] **Phase 2: CI/CD + GitOps.** GitHub Actions (test → build → Trivy scan → push), ArgoCD, dev and prod environments, promotion by pull request
+- [x] **Phase 2: CI/CD + GitOps.** GitHub Actions (test → build → Trivy scan → push to GHCR), ArgoCD app-of-apps, dev and prod environments, promotion by pull request. First run: all jobs green, ArgoCD deployed dev automatically, prod deployed by merging [promotion PR #1](https://github.com/chaithanyareddyk3273/shopflow-gitops/pull/1), and the end-to-end test passed in both.
 - [ ] **Phase 3: Production on AWS.** Terraform EKS, Prometheus + Grafana, HPA, NetworkPolicies, Sealed Secrets, Argo Rollouts canary deployments
 
 **Known trade-offs to address:** if the database write fails after stock is reserved, that stock isn't released. The fix is a compensating action or the saga pattern. Similarly, if RabbitMQ is unavailable or the event can't be routed at publish time, the order stays confirmed but the event is not retried. The failure is logged and counted in `order_event_publish_failures_total`. The fix is the transactional outbox pattern. Both are planned for later phases.
