@@ -213,7 +213,18 @@ Starts 5 containers: Postgres, RabbitMQ and the 3 services. `depends_on ... cond
 4. Restarts the services to pick up the new images, then waits until every pod is ready
 
 ### `scripts/smoke-test.sh`: proof the whole system works
-Sends 3 real orders (a valid one, one with too much quantity, and one with an unknown product), checks each response code (201, 409, 404), then checks the notifier's log to confirm the notification was sent.
+Sends 3 real orders (a valid one, one with too much quantity, and one with an unknown product), checks each response code (201, 409, 404), then checks the notifier's log to confirm the notification was sent. Pass a namespace to test another environment: `./scripts/smoke-test.sh shopflow-dev`.
+
+### `.github/workflows/ci.yml`: the automatic pipeline
+GitHub runs this file on every push and pull request. It has 3 jobs, and each one only starts if the previous one passed:
+
+| Job | In plain English |
+|---|---|
+| **test** | For each of the 3 services, at the same time: install the libraries, run the linter (`ruff`, which catches mistakes like unused imports), run the unit tests (`pytest`) |
+| **build** | Build each service's Docker image, then scan it with **Trivy**, a security scanner that knows every published vulnerability. If it finds a serious one that has a fix, the pipeline **stops**. On `main` only, it then uploads the image to GitHub Container Registry with the tag `sha-<commit>`. |
+| **deploy-dev** | On `main` only: edit `environments/dev/values.yaml` in the **shopflow-gitops** repo to use the new tag, and commit it. ArgoCD (in the cluster) sees the commit and deploys it. |
+
+Notice that **CI never runs `kubectl`**: it has no access to the cluster at all. It only changes Git; ArgoCD does the deploying. The [gitops walkthrough](https://github.com/chaithanyareddyk3273/shopflow-gitops/blob/main/docs/HELM_WALKTHROUGH.md#9-argocd-and-the-pipeline) explains the rest of the journey to prod.
 
 ---
 
