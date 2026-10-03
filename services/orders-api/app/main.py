@@ -10,6 +10,7 @@ What it does for each order:
 Order lifecycle: PENDING -> CONFIRMED | REJECTED | FAILED
 """
 import logging
+import random
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Response, status
@@ -82,6 +83,10 @@ def create_order(
     inv: InventoryClient = Depends(get_inventory),
     events: EventPublisher = Depends(get_publisher),
 ) -> dict:
+    # Chaos testing only (off by default): fail a share of requests on purpose
+    if config.FAULT_INJECTION_RATE and random.random() < config.FAULT_INJECTION_RATE:
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Injected fault (FAULT_INJECTION_RATE)")
+
     # Step 1: save the order as PENDING first, so every attempt is recorded,
     # even ones that end up rejected or failed.
     order = repo.create(order_in.sku, order_in.quantity, order_in.customer_email, status="PENDING")

@@ -171,7 +171,7 @@ orders-api returns `201 Created` with the saved order:
 | File | What's in it |
 |---|---|
 | `app/main.py` | The **endpoints** (`POST /orders`, `GET /orders`, `GET /orders/{id}`, `/healthz`, `/readyz`) and the order logic from section 3 |
-| `app/config.py` | Settings from **environment variables** (`DATABASE_URL`, `RABBITMQ_URL`, `INVENTORY_URL`). The same image runs everywhere; only these change. |
+| `app/config.py` | Settings from **environment variables** (`DATABASE_URL`, `RABBITMQ_URL`, `INVENTORY_URL`). The same image runs everywhere; only these change. `FAULT_INJECTION_RATE` (off by default) makes a share of orders fail on purpose, to test that a bad canary release is rolled back. |
 | `app/db.py` | `OrderRepository`: every SQL statement for the `orders` table. `init_schema` creates the table at startup, and **keeps retrying** (30 tries, 2 seconds apart) while Postgres is still starting. |
 | `app/inventory_client.py` | Calls inventory-svc and turns HTTP status codes into Python exceptions. Always uses a **timeout**. |
 | `app/events.py` | `EventPublisher`: sends events to RabbitMQ with delivery confirmation |
@@ -273,6 +273,10 @@ One atomic SQL statement: <code>UPDATE ... SET stock = stock - n WHERE sku = ...
 
 <details><summary><b>What happens if RabbitMQ is down when an order is placed?</b></summary>
 The order is still confirmed (stock is reserved). The publish fails, which is logged and counted in <code>order_event_publish_failures_total</code>, so the failure is visible. The event isn't retried yet; the fix is the <b>transactional outbox pattern</b>: save the event in the same database transaction as the order, and have a separate process send it.
+</details>
+
+<details><summary><b>Two replicas start at the same time. What can go wrong with the database?</b></summary>
+Both run their schema setup at once. <code>CREATE TABLE IF NOT EXISTS</code> isn't safe across concurrent connections: both can decide the table is missing, and one crashes with a duplicate-key error. This really happened once autoscaling was on (see "Bug 2" in the README). The fix is a Postgres <b>advisory lock</b> (<code>pg_advisory_xact_lock</code>) in the same transaction, so replicas take turns. In bigger systems, migrations run as a separate one-off job before the new version starts.
 </details>
 
 <details><summary><b>Liveness vs readiness?</b></summary>

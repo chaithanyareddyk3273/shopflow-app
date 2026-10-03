@@ -141,6 +141,23 @@ def test_readiness_reflects_database(client, fakes):
     assert client.get("/healthz").status_code == 200  # liveness must not depend on the DB
 
 
+def test_fault_injection_off_by_default(client, fakes):
+    repo, _, _ = fakes
+    for _ in range(20):
+        assert client.post("/orders", json=VALID_ORDER).status_code == 201
+
+
+def test_fault_injection_fails_requests_with_500(client, fakes, monkeypatch):
+    repo, inv, _ = fakes
+    monkeypatch.setattr("app.config.FAULT_INJECTION_RATE", 1.0)
+
+    resp = client.post("/orders", json=VALID_ORDER)
+
+    assert resp.status_code == 500
+    assert repo.orders == {}       # failed before doing anything: no order saved...
+    assert inv.reserved == []      # ...and no stock reserved
+
+
 def test_metrics_endpoint_exposes_order_counter(client):
     client.post("/orders", json=VALID_ORDER)
     body = client.get("/metrics").text

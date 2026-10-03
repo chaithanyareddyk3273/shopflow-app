@@ -69,6 +69,9 @@ flowchart LR
 | **Sync HTTP for stock, async events for notifications** | The order must know immediately whether stock exists, but a notification can arrive later. A notifier outage never blocks orders. |
 | **Atomic stock reservation** | `UPDATE … SET stock = stock - n WHERE sku = … AND stock >= n` is a single statement, so concurrent orders can't oversell the last item. No application-level locks. |
 | **Persist the order before reserving** | Every attempt is auditable, including rejected and failed ones. |
+| **Advisory lock around schema setup** | Several replicas start at once, and `CREATE TABLE IF NOT EXISTS` isn't safe concurrently. `pg_advisory_xact_lock` makes them take turns (see below). |
+| **Canary releases judged by metrics** | orders-api ships through Argo Rollouts: 50% of pods first, then Prometheus checks the new version's success rate; below 95% it rolls back automatically. |
+| **Default-deny network policies** | Pods accept traffic only from the services that need them, so a compromised notifier can't reach Postgres. |
 | **Publisher confirms + mandatory routing** | RabbitMQ must acknowledge every event, and an event with no bound queue raises an error instead of vanishing silently (see below). |
 | **Poison messages are dropped, not requeued** | A malformed event would otherwise be redelivered forever and block the queue. |
 | **Separate liveness and readiness** | `/healthz` (liveness) never checks dependencies, so a database outage doesn't trigger a restart storm. `/readyz` (readiness) checks them, removing the pod from traffic until they recover. |
@@ -83,6 +86,7 @@ flowchart LR
 
 ## 🐛 What broke and how I fixed it
 
+### Bug 1: order events silently lost at startup
 **Symptom:** on a fresh `docker compose up`, the first order was confirmed but the customer never got a notification, and nothing reported a problem.
 
 **Root cause:** two things combined.
@@ -95,6 +99,15 @@ flowchart LR
 - **notifier** retries every 2 seconds instead of 5.
 
 **Verified** by starting orders-api without the notifier: the order returns `201`, the log shows `UnroutableError`, and the metric reads `1`. A full fresh start now delivers the notification. **Still open:** detection isn't the same as delivery. Guaranteeing delivery needs the transactional outbox pattern (see the roadmap).
+
+### Bug 2: replicas crashed when starting together
+**Symptom:** after turning on autoscaling (minimum 2 replicas), one inventory-svc pod crashed on startup with `UniqueViolation: duplicate key value violates unique constraint "pg_type_typname_nsp_index"`. Kubernetes restarted it and it recovered, but by luck rather than by design.
+
+**Root cause:** both replicas ran `CREATE TABLE IF NOT EXISTS items` against an empty database at the same moment. `IF NOT EXISTS` isn't atomic across connections: both saw "doesn't exist", both tried to create the table, and one lost. The same race existed in orders-api and in prod (2 replicas each), where it simply hadn't been hit yet.
+
+**Fix:** each service takes a **Postgres advisory lock** (`SELECT pg_advisory_xact_lock(...)`) in the same transaction before creating its schema, so replicas take turns. The lock is released automatically at commit. Covered by `tests/test_db.py` in both services.
+
+**Verified:** 3 rounds of wiping the database and starting both replicas of each API simultaneously, with **0 restarts** in every round.
 
 ### Security: what the first Trivy scan found
 Before turning on the "fail on HIGH/CRITICAL" gate, I scanned the existing images locally:
@@ -120,7 +133,7 @@ Every service exposes Prometheus metrics on `/metrics`:
 | `inventory_reservations_total{result}` | Reservations: `reserved` / `out_of_stock` / `unknown_sku` |
 | `notifications_total{result}` | Notifications `sent` / `malformed` |
 
-Prometheus and Grafana dashboards arrive in Phase 3.
+**Phase 3:** Prometheus scrapes these every 15 s (via a ServiceMonitor), a [Grafana dashboard](https://github.com/chaithanyareddyk3273/shopflow-gitops/blob/main/platform/dashboards/shopflow.json) shows them per environment, and 4 alert rules cover service down, error rate above 5%, p95 latency above 500 ms, and lost order events. The same success-rate signal decides canary releases. To fill the dashboard with traffic: `./scripts/load-test.sh start shopflow-dev`.
 
 ---
 
@@ -186,7 +199,8 @@ shopflow-app/
 │       └── requirements.txt
 ├── scripts/
 │   ├── kind-up.sh         # local Kubernetes deploy ("local" environment)
-│   └── smoke-test.sh      # end-to-end test: ./scripts/smoke-test.sh [namespace]
+│   ├── smoke-test.sh      # end-to-end test: ./scripts/smoke-test.sh [namespace]
+│   └── load-test.sh       # steady traffic for autoscaling / dashboards / canaries
 ├── docs/CODE_WALKTHROUGH.md  # plain-English guide: one order through the code
 ├── deploy/postgres-init.sql
 └── docker-compose.yml
@@ -198,6 +212,7 @@ shopflow-app/
 
 - [x] **Phase 1: Microservices on Kubernetes.** 3 services, Dockerfiles, Helm chart, kind, tests
 - [x] **Phase 2: CI/CD + GitOps.** GitHub Actions (test → build → Trivy scan → push to GHCR), ArgoCD app-of-apps, dev and prod environments, promotion by pull request. First run: all jobs green, ArgoCD deployed dev automatically, prod deployed by merging [promotion PR #1](https://github.com/chaithanyareddyk3273/shopflow-gitops/pull/1), and the end-to-end test passed in both.
-- [ ] **Phase 3: Production on AWS.** Terraform EKS, Prometheus + Grafana, HPA, NetworkPolicies, Sealed Secrets, Argo Rollouts canary deployments
+- [ ] **Phase 3A: Production features.** Prometheus + Grafana + alerts, HPA autoscaling, NetworkPolicies, Sealed Secrets, Argo Rollouts canary with automatic rollback. All built and tested on kind; rolling out to dev → prod
+- [ ] **Phase 3B: AWS.** Terraform for VPC + EKS, the same GitOps setup on a real cloud cluster
 
 **Known trade-offs to address:** if the database write fails after stock is reserved, that stock isn't released. The fix is a compensating action or the saga pattern. Similarly, if RabbitMQ is unavailable or the event can't be routed at publish time, the order stays confirmed but the event is not retried. The failure is logged and counted in `order_event_publish_failures_total`. The fix is the transactional outbox pattern. Both are planned for later phases.

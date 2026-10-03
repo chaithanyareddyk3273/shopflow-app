@@ -18,3 +18,8 @@ INVENTORY_URL = os.getenv("INVENTORY_URL", "http://localhost:8001")
 
 # Events go to a "topic" exchange so any number of services can subscribe to them
 EVENTS_EXCHANGE = os.getenv("EVENTS_EXCHANGE", "shopflow.events")
+
+# Chaos testing: the share of POST /orders requests to fail on purpose with a 500
+# (0 = off, 0.5 = half of them). Used to prove that a canary deployment with a high
+# error rate is rolled back automatically. Never set this in normal operation.
+FAULT_INJECTION_RATE = float(os.getenv("FAULT_INJECTION_RATE", "0"))
