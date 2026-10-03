@@ -15,6 +15,9 @@ CREATE TABLE IF NOT EXISTS items (
 )
 """
 
+# Arbitrary constant: identifies "inventory schema setup" among Postgres advisory locks
+SCHEMA_LOCK_ID = 727001
+
 SEED_ITEMS = [
     ("SKU-001", "Mechanical Keyboard", 50),
     ("SKU-002", "USB-C Hub", 100),
@@ -40,6 +43,11 @@ class InventoryRepository:
         for attempt in range(1, attempts + 1):
             try:
                 with self._connect() as conn:
+                    # Several replicas start at once. "CREATE TABLE IF NOT EXISTS" is NOT safe
+                    # when two connections run it at the same moment (both can try to create,
+                    # one fails with a duplicate-key error). This lock makes them take turns;
+                    # it's released automatically when the transaction commits.
+                    conn.execute("SELECT pg_advisory_xact_lock(%s)", (SCHEMA_LOCK_ID,))
                     conn.execute(SCHEMA)
                     with conn.cursor() as cur:
                         cur.executemany(

@@ -20,6 +20,9 @@ CREATE TABLE IF NOT EXISTS orders (
 
 COLUMNS = "id, sku, quantity, customer_email, status, created_at"
 
+# Arbitrary constant: identifies "orders schema setup" among Postgres advisory locks
+SCHEMA_LOCK_ID = 727002
+
 
 class OrderRepository:
     """
@@ -43,6 +46,11 @@ class OrderRepository:
         for attempt in range(1, attempts + 1):
             try:
                 with self._connect() as conn:
+                    # Several replicas start at once. "CREATE TABLE IF NOT EXISTS" is NOT safe
+                    # when two connections run it at the same moment (both can try to create,
+                    # one fails with a duplicate-key error). This lock makes them take turns;
+                    # it's released automatically when the transaction commits.
+                    conn.execute("SELECT pg_advisory_xact_lock(%s)", (SCHEMA_LOCK_ID,))
                     conn.execute(SCHEMA)
                 log.info("orders schema ready")
                 return
